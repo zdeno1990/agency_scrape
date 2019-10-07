@@ -1,0 +1,170 @@
+import pandas
+import numpy
+import requests
+import csv
+import unicodedata
+import matplotlib.pyplot as plt
+from bs4 import BeautifulSoup as BS
+
+
+def page_load(page):
+    source = requests.get(page).text
+    soup = BS(source,'lxml')
+
+    return soup
+
+def split_col(df,col,sep=','):
+#prida do df nove stlpce,pocet podla max poctu hodnot v povodnom stlpci
+
+    new_cols = []
+    num_col = 1
+    for i in range(1,len(df[col].str.split(sep,expand=True).columns)+1):
+        new_cols.append(str(col)+' '+str(num_col))
+        num_col += 1
+
+    return new_cols
+
+def unique_val(df,lst,col,sep=','):
+#ulozi unikatne hodnoty do listu,a v df vyplni hodnoty po jednom
+    df[split_col(df,col)] = df[col].str.split(sep,expand=True)
+    df = df.apply(lambda x: x.str.strip())
+    unique = pandas.unique(df[lst].values.ravel('K'))
+    unique = numpy.array(unique).tolist()
+    unique = [i for i in unique if i != None and i != '']
+
+    return unique
+
+def make_dct(lst,lst2,df,arg1,arg2,arg3):
+#csv dictreader nefungoval spravne,nacitaval rovnake kluce viac krat kvoly medzeram,nevedel si to ostripovat
+    dct = {}
+
+    for i,v in enumerate(lst):
+        dct[lst[i]] = df.loc[(df[arg1].str.contains(lst2)) & (df[arg2].str.contains(lst[i]))].count()[arg3]
+
+    return dct
+
+
+def strip_accents(s):
+#vrati kluc slovniku
+    s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+
+    return s.replace(' ','_')
+
+csv_file = open('manpowergroup_work_positions.csv','w',encoding='utf-8')
+csv_writer = csv.writer(csv_file)
+csv_writer.writerow(['Pozice','Popis','Kraj','Obor','Úvazek'])
+
+i=0
+url = f'https://www.manpower.cz/manpower/cs/hledam-praci/?of=1&id={str(i)}&tu=#vysledky'
+while True:
+    i = i+1
+    print(i)
+    url = f'https://www.manpower.cz/manpower/cs/hledam-praci/?of=1&id={str(i)}&tu=#vysledky'
+    print(url)
+    soup = page_load(url)
+
+    if bool(soup.find('div', class_='ovalposition2')) == False:
+        print('False')
+        break
+
+    else:
+
+        for ad in soup.find_all('div',class_='ovalposition2'):
+            ad_position = ad.h2.text
+
+            print('Writing data: ',ad_position)
+            ad_txt = ad.p.text
+            print('Writing data: ',ad_txt)
+            info = ad.find('p',class_='spodni_lista_inzeratu').text
+
+            info = info.split('\xa0')
+
+            new_info = [i for i in info if i!='']
+            print('Writing data: ',new_info)
+            csv_writer.writerow([ad_position,ad_txt,new_info[0],new_info[1],new_info[2]])
+
+csv_file.close()
+
+df = pandas.read_csv('manpowergroup_work_positions.csv')
+
+kraje = unique_val(df,split_col(df,'Kraj'),'Kraj')
+
+obory = unique_val(df,split_col(df,'Obor'),'Obor')
+
+ponuky_kraje = {}
+
+for index,value in enumerate(kraje):
+     ponuky_kraje[kraje[index]] = df.loc[df['Kraj'].str.contains(kraje[index])].count()['Popis']
+
+
+praha = kraje.index('Hlavní město Praha')
+explode = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+explode[praha] = 0.1
+#pie chart ponuk v krajoch CR
+
+plt.axis("equal")
+plt.pie(ponuky_kraje.values(),labels=ponuky_kraje.keys(),explode=explode,shadow=True,wedgeprops={'edgecolor':'black'})
+plt.title('Ponuky práce v ČR')
+plt.tight_layout()
+plt.show()
+
+kraje_val = {}
+
+for i,v in enumerate(kraje):
+    kraje_val[kraje[i]] = make_dct(obory,kraje[i],df,'Kraj','Obor','Pozice')
+print(kraje_val['Hlavní město Praha'])
+
+#porovnanie ponuk v oboroch v prahe a Stredocesky kraj
+
+plt.style.use('fivethirtyeight')
+
+plt.rcParams.update({'font.size': 12})
+
+plt.barh(*zip(*kraje_val['Hlavní město Praha'].items()),color='#e5ae37',label='Hlavní město Praha')
+
+plt.barh(*zip(*kraje_val['Středočeský'].items()),color='#008fd5',label='Stredočeský Kraj')
+plt.title('Porovnáni pracovních ponúk v Praze a Stredočeskom kraji')
+plt.ylabel('Obory')
+plt.xlabel('Ponuky')
+
+plt.legend()
+plt.show()
+
+print(obory)
+#porovnanie ponuk v oboroch man. praca,it,zdravotnictvo
+ponuky_it = []
+for k,v in kraje_val.items():
+    a = kraje_val[k]['IT konzultace']
+    b = kraje_val[k]['IT vývoj']
+    c = kraje_val[k]['IT správa']
+    res = a+b+c
+    ponuky_it.append(res)
+
+ponuky_manual_prace = []
+
+for k,v in kraje_val.items():
+    ponuky_manual_prace.append(kraje_val[k]['Manuální práce'])
+
+ponuky_zdrav = []
+for k,v in kraje_val.items():
+    ponuky_zdrav.append(kraje_val[k]['Zdravotnictví a farmaceutika'])
+
+
+
+
+y_indexes = numpy.arange(len(kraje))
+width = 0.25
+
+plt.style.use('fivethirtyeight')
+plt.barh(y_indexes-width,ponuky_manual_prace,width,color='#fc4f30',label='Manuální práce')
+
+plt.barh(kraje,ponuky_it,width,color='#008fd5',label='IT')
+
+plt.barh(y_indexes+width,ponuky_zdrav,width,color='#a5ae37',label='Zdravotnictvi')
+
+plt.title('Porovnáni pracovních ponúk v oborech IT,Zdravotnictvi,Manuální práce ')
+plt.ylabel('Kraje')
+plt.xlabel('Ponuky')
+plt.legend()
+plt.show()
+
